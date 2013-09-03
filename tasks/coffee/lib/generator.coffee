@@ -4,15 +4,21 @@ parseXml       = require('xml2js').parseString
 http           = require('http')
 phantom        = require("phantom")
 
-done = this.async() || (->)
+red    = '\u001b[31m'
+blue   = '\u001b[34m'
+cyan   = '\u001b[36m'
+reset  = '\u001b[0m'
+under  = '\u001b[90m'
+
+String::replaceObject = (obj) ->
+    result = this
+    for key of obj
+        re     = new RegExp("{#{key}}", "g")
+        result = result.replace(re, obj[key])
+
+    return result
 
 class SpriteGenerator
-    filenamePrefix:  "ritzau-logo"
-    imageDirectory:  "ritzau-logos"
-    cssSubDirectory: "ritzau-css"
-    logoPath:        "../../img/ritzau-logos/"
-    spriteUrl:       "../../img/sprites/ritzau-logos.png"
-
     cssTemplate:
         """
             .{name} {
@@ -46,22 +52,25 @@ class SpriteGenerator
     ### EPG
     ########################################################################################################################
 
-    constructor: (epgFeedUrl, killer) ->
-        options = options || {}
-        grunt.log.write "Generating Ritzau logos + sprite ..."
+    constructor: (epgFeedUrl, options) ->
+        @start = +new Date()
+        @options = options || {}
+        @done    = @options.done
+        @grunt   = @options.grunt
+
+        @grunt.log.writeln "#{under}>>#{reset} Generating Ritzau logos + sprite ..."
 
         @epgFeedUrl = epgFeedUrl
 
-        @filenamePrefix  = options.filenamePrefix unless not options.filenamePrefix
-        @imageDirectory  = options.imageDirectory unless not options.imageDirectory
-        @cssSubDirectory = options.cssDirectory unless not options.cssDirectory
-        @logoPath        = options.urlLogos unless not options.urlLogos
-        @spriteUrl       = options.urlSprite unless not options.urlSprite
-
-        fs.mkdir @imageDirectory, (error) ->
-            # WE DONT CARE IF IT FAILS GOD DAMN IT!
-
-        this.epgRequest()
+        fs.mkdir @options.files.logos, (error) ->
+        # WE DONT CARE IF IT FAILS GOD DAMN IT!
+        host = require("url").parse(@epgFeedUrl).hostname
+        require('dns').lookup host, (error) =>
+          if error
+            @grunt.log.error "Could not connect to EPG. Check intranet connectivity."
+            @grunt.errorCount++
+          else
+            this.epgRequest()
 
     ########################################################################################################################
     ### EPG
@@ -85,6 +94,15 @@ class SpriteGenerator
     ### Channel parsing
     ########################################################################################################################
 
+    validImageExtension: (channel, string) ->
+        valid = [".gif", ".png", ".jpg", ".jpeg"]
+
+        if valid.indexOf(string.substr(string.lastIndexOf("."))) is -1
+            @grunt.log.warn "Invalid image extension for #{cyan}#{channel.name}#{reset} #{under}(#{channel.ident})#{reset} - skipping"
+            return false
+
+        return true
+
     parseChannels: ->
         @downloadedImages = 0
         @parsedImages     = 0
@@ -95,9 +113,9 @@ class SpriteGenerator
             channel.images    = []
             channel.imageUrls = []
 
-            channel.imageUrls.push(channel.logo_16.toString()) unless not channel.logo_16
-            channel.imageUrls.push(channel.logo_32.toString()) unless not channel.logo_32
-            channel.imageUrls.push(channel.logo_50.toString()) unless not channel.logo_50
+            channel.imageUrls.push(channel.logo_16.toString()) unless not channel.logo_16 or not this.validImageExtension(channel, channel.logo_16.toString())
+            channel.imageUrls.push(channel.logo_32.toString()) unless not channel.logo_32 or not this.validImageExtension(channel, channel.logo_32.toString())
+            channel.imageUrls.push(channel.logo_50.toString()) unless not channel.logo_50 or not this.validImageExtension(channel, channel.logo_50.toString())
 
             @totalImages += channel.imageUrls.length
 
@@ -115,15 +133,15 @@ class SpriteGenerator
                 this.downloadImages(channel, url, j)
 
     downloadImages: (channel, url, i) ->
-        filename = "#{@imageDirectory}/#{@filenamePrefix}-#{channel.ident}-temp#{i}.png"
+        filename = "#{@options.files.logos}/#{@options.files.logoPrefix}-#{channel.ident}-temp#{i}.png"
 
         http.get url, (response) =>
-            grunt.log.warn "Failed to download sprite (#{url} @ #{channel.ident}) -- Status code: #{response.statusCode}" unless response.statusCode >= 200 and response.statusCode < 400
+            @grunt.log.warn "Failed to download sprite #{cyan}#{url}#{reset} #{under}(#{channel.ident})#{reset} -- Status code: #{response.statusCode}" unless response.statusCode >= 200 and response.statusCode < 400
             response.pipe(fs.createWriteStream(filename)).on "close", =>
                 @downloadedImages++
 
                 channel.images.push
-                    filename:     "#{__dirname}/#{filename}"
+                    filename:     filename
                     url:          url
                     dimensions:   null
                     dimensionSum: 0
@@ -147,8 +165,8 @@ class SpriteGenerator
         params = 
             channels:       @channels
             cssTemplate:    @cssTemplate
-            logoPath:       @logoPath
-            filenamePrefix: @filenamePrefix
+            logoPath:       @options.css.logoPath
+            filenamePrefix: @options.css.logoPrefix
 
         fn = "function() { return (#{evaluation.toString()}).apply(this, #{JSON.stringify([params])});}"
 
@@ -162,25 +180,37 @@ class SpriteGenerator
     ### Phantom
     ########################################################################################################################
 
+    didWrite: (error) =>
+        if --@jobs is 0
+            end = +new Date()
+            @grunt.log.ok "Finished in #{end-@start}ms"
+            @done()
+
     pageResult: (result) =>
         @phantom.exit()
-        console.log JSON.stringify(result.moo)
+
+        for filename in result.images
+            fs.renameSync(filename, filename.replace(/\-temp\d\./gi, "."))
+
+        # Delete temp files
+        fs.readdir @options.files.logos, (error, list) =>
+            for file in list
+                continue unless file.lastIndexOf("temp") isnt -1
+                file = "#{@options.files.logos}/#{file}"
+                stat = fs.statSync(file)
+                if not stat.isDirectory()
+                    fs.unlink(file)
+
+            this.didWrite()
+
+        @jobs = 3
 
         buffer = result.sprite.substring(1, result.sprite.length-2)
         buffer = buffer.replace(/^data:image\/png;base64,/, "")
+        fs.writeFile @options.files.sprite, buffer, 'base64', this.didWrite
 
-        fs.writeFile "#{__dirname}/out.png", buffer, 'base64', (error) ->
-            if error
-                grunt.log.error "Failed to save sprite"
-            else
-                grunt.log.ok "Sprite saved"
-
-        fs.writeFile "#{__dirname}/out.css", result.css, (error) ->
-            if error
-                grunt.log.error "Failed to save stylesheet"
-            else
-                grunt.log.ok "Stylesheet saved"
-
-        done()
-
-new SpriteGenerator("http://epgpack:7777/susepg/REST/channels", (->))
+        css = @cssFooterTemplate.replaceObject
+            spriteUrl: @options.css.spritePath
+            prefix:    @options.css.logoPrefix
+        css += result.css
+        fs.writeFile @options.files.stylesheet, css, this.didWrite

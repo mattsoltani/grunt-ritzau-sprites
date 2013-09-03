@@ -32,6 +32,7 @@ evaluation = (options) ->
     width  = 0
     height = 0
     css    = ""
+    imgs   = []
 
     for channel in channels
         image = largestImageWithIdent(channel.ident)
@@ -52,6 +53,7 @@ evaluation = (options) ->
     for channel in channels
         continue unless channel.spriteImage
         ctx.drawImage(channel.spriteImage, 0, offset)
+        imgs.push(channel.spriteImage.src.replace("file://", ""))
 
         offset += channel.spriteImage.height
         css    += "\n\n" + cssTemplate.replaceObject
@@ -68,6 +70,6 @@ evaluation = (options) ->
         css:    css
         width:  width
         height: height
-        moo: moo
+        images: imgs
 
     return result
