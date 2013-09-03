@@ -1,6 +1,6 @@
 {
   "name": "sprite-service",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Generates sprite and stylesheet for use at dr.dk",
   "main": "generator.js",
   "scripts": {
