@@ -13,7 +13,7 @@
     "w3c-xmlhttprequest": "~1.0.0",
     "request": "~2.25.0",
     "xml2js": "~0.2.8",
-    "phantom": "~0.5.2",
+    "phantomjs": "*",
     "async": "*"
   },
   "devDependencies": {
